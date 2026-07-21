@@ -17,6 +17,7 @@ fetch one CORD receipt image
   -> Mistral OCR with a strict receipt JSON schema
   -> normalize the OCR annotation
   -> choose an applicable perturbation
+  -> trace the original values, synthetic noise, and exact delta in Langfuse
   -> render synthetic claim vs Mistral OCR
   -> recommend reimbursement
 ```
@@ -36,9 +37,22 @@ cp .env.example .env        # set MISTRAL_API_KEY
 bun run dev
 ```
 
-The key is read only inside the server function and is never exposed to the client bundle.
+The keys are read only inside the server runtime and are never exposed to the client bundle.
 The web workflow requires outbound access to `datasets-server.huggingface.co` and
 `api.mistral.ai`.
+
+When both Langfuse keys are configured, every generated review is exported as one
+`receipt-review-pipeline` trace with these nested observations:
+
+1. `fetch-cord-image` (`retriever`) — dataset row and image dimensions
+2. `mistral-receipt-ocr` (`generation`) — model, confidence, and structured receipt
+3. `normalize-receipt-fields` (`tool`) — normalized monetary and line-item fields
+4. `synthetic-noise-addition` (`tool`) — original values, selected noise type, changed
+   claim values, exact finding/delta, and reimbursement recommendation
+
+Retries appear as separate `receipt-attempt` child chains. Trace export is immediate so
+short-lived server instances do not lose completed observations. If Langfuse is not
+configured, the workflow continues normally without tracing.
 
 ## Validate
 

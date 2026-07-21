@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  buildClaimFromNormalizedReceipt,
   buildClaimFromReceipt,
+  normalizeReceiptSource,
   type ReceiptSource,
 } from "./receipt-generator-core";
 
@@ -43,6 +45,25 @@ const row: ReceiptSource = {
 };
 
 describe("buildClaimFromReceipt", () => {
+  test("keeps normalization and synthetic noise as separable pipeline phases", () => {
+    const normalized = normalizeReceiptSource(row);
+    const claim = buildClaimFromNormalizedReceipt(
+      normalized,
+      () => 0,
+      "total-mismatch",
+    );
+
+    expect(normalized.receipt.total).toBe(51_700);
+    expect(normalized.receipt.items[1]).toMatchObject({
+      name: "ICE TEA",
+      unitPrice: 8_000,
+      totalPrice: 7_000,
+      discount: 1_000,
+    });
+    expect(claim.provenance.permutation).toBe("total-mismatch");
+    expect(claim.totalClaim).toBeGreaterThan(normalized.receipt.total);
+  });
+
   test("inflates a claim total from the Mistral OCR extraction", () => {
     const claim = buildClaimFromReceipt(row, () => 0, "total-mismatch");
 

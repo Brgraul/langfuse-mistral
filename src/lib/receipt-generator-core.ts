@@ -145,7 +145,7 @@ type ReceiptItem = {
   listPrice: number;
 };
 
-type NormalizedReceipt = {
+export type NormalizedReceipt = {
   imageId: number | string;
   merchant: string | null;
   items: ReceiptItem[];
@@ -156,6 +156,13 @@ type NormalizedReceipt = {
   total: number;
   cash: number | null;
   change: number | null;
+};
+
+export type NormalizedReceiptSource = Omit<
+  ReceiptSource,
+  "extractedReceipt"
+> & {
+  receipt: NormalizedReceipt;
 };
 
 export type Permutation =
@@ -198,7 +205,29 @@ export function buildClaimFromReceipt(
   random: () => number = Math.random,
   forcedPermutation?: Permutation,
 ): Claim {
-  const receipt = normalizeExtractedReceipt(row.extractedReceipt, row.rowIndex);
+  return buildClaimFromNormalizedReceipt(
+    normalizeReceiptSource(row),
+    random,
+    forcedPermutation,
+  );
+}
+
+export function normalizeReceiptSource(
+  row: ReceiptSource,
+): NormalizedReceiptSource {
+  const { extractedReceipt, ...source } = row;
+  return {
+    ...source,
+    receipt: normalizeExtractedReceipt(extractedReceipt, row.rowIndex),
+  };
+}
+
+export function buildClaimFromNormalizedReceipt(
+  row: NormalizedReceiptSource,
+  random: () => number = Math.random,
+  forcedPermutation?: Permutation,
+): Claim {
+  const receipt = row.receipt;
   if (receipt.total <= 0) {
     throw new Error(
       `Mistral OCR found no usable total for CORD row ${row.split}/${row.rowIndex}`,
