@@ -1,4 +1,4 @@
-mistralai>=1.10.0
+mistralai==1.10.0
 langfuse>=3.0.0
 datasets>=3.0.0
 pillow>=10.0.0

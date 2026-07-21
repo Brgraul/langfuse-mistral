@@ -22,8 +22,10 @@ CATEGORY_CAPS = {
 # Absolute amount above which a claim must be escalated for manager sign-off.
 ESCALATION_THRESHOLD = 250_000
 
-# Tolerance (absolute) for float comparisons on money.
-AMOUNT_TOLERANCE = 1.0
+# Tolerance for float comparisons on money. The effective tolerance is
+# max(AMOUNT_TOLERANCE, RELATIVE_TOLERANCE * amount) so it scales with receipt size.
+AMOUNT_TOLERANCE = 0.01
+RELATIVE_TOLERANCE = 0.005  # 0.5%
 
 POLICY_RULES = {
     "AMOUNT_MISMATCH": "Claimed amount does not match the receipt total.",

@@ -122,8 +122,10 @@ def main():
     records = load_samples(n=args.n, split=args.split)
 
     results = []
-    for rec in records:
-        seed = args.seed
+    for idx, rec in enumerate(records):
+        # Offset the seed per receipt so a multi-receipt run exercises different
+        # inconsistencies (when --inconsistency isn't pinned). Deterministic if --seed given.
+        seed = None if args.seed is None else args.seed + idx
         results.append(run_one(rec, lf, args.inconsistency, seed, args.mock))
 
     try:

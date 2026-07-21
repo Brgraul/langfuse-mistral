@@ -15,6 +15,7 @@ venv/
 .cache/
 data/samples/
 outputs/
+results.json
 *.log
 
 # OS

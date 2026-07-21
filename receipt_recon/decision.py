@@ -21,9 +21,13 @@ TOL = policy.AMOUNT_TOLERANCE
 
 
 def _approx(a, b) -> bool:
+    """Money-equal within tolerance. Tolerance is scale-relative so it works for both
+    small totals (e.g. 60.00) and large rupiah amounts (e.g. 91,000) — a flat window
+    would be huge for the former and cause coincidental rule matches."""
     if a is None or b is None:
         return False
-    return abs(a - b) <= TOL
+    tol = max(TOL, policy.RELATIVE_TOLERANCE * max(abs(a), abs(b)))
+    return abs(a - b) <= tol
 
 
 def _sum_items(items) -> float:
@@ -54,12 +58,17 @@ def reconcile(claim: ExpenseClaim, receipt: ExtractedReceipt) -> Decision:
         )
 
     # --- 3. Internal receipt consistency: items vs subtotal ------------------
+    # Only flag when items sum to MORE than the subtotal — that can't be explained
+    # by OCR missing a line. Under-summing almost always means OCR dropped an item,
+    # which is an extraction-quality issue (surfaced by extraction_accuracy), not a
+    # reason to escalate the reimbursement decision.
     if receipt.subtotal is not None and receipt.items:
-        if not _approx(_sum_items(receipt.items), receipt.subtotal):
+        items_sum = _sum_items(receipt.items)
+        if items_sum > receipt.subtotal and not _approx(items_sum, receipt.subtotal):
             findings.append(
                 (
                     "SUBTOTAL_MISMATCH",
-                    f"line items sum to {_sum_items(receipt.items)} vs subtotal {receipt.subtotal}",
+                    f"line items sum to {items_sum} vs subtotal {receipt.subtotal}",
                 )
             )
 
