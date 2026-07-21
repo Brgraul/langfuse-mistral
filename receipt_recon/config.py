@@ -23,7 +23,7 @@ def get_env(name: str, default: Optional[str] = None) -> Optional[str]:
 @lru_cache(maxsize=1)
 def mistral_client():
     """Return a configured Mistral client, or raise if no key."""
-    from mistralai import Mistral
+    from mistralai.client import Mistral
 
     api_key = get_env("MISTRAL_API_KEY")
     if not api_key:
