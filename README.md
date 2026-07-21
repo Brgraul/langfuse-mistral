@@ -42,6 +42,27 @@ python main.py --seed 7 --out results.json       # deterministic + write results
   place of OCR) — handy if the live API is flaky during a demo.
 - Without Langfuse keys, tracing degrades to a no-op and the pipeline still runs locally.
 
+## Frontend (reviewer UI)
+
+A TanStack Start + React app (`src/`) renders the reviewer view: receipt image,
+claim-vs-OCR comparison, findings, policy rules, and the reimbursable calculation.
+
+It reads real pipeline output from `src/data/claims.json`. Regenerate it any time with:
+
+```bash
+python main.py --n 4 --seed 3 --export-frontend   # writes src/data/claims.json + public/receipts/*
+```
+
+Then run the UI (npm or bun):
+
+```bash
+npm install && npm run dev        # http://localhost:8080
+```
+
+The adapter (`receipt_recon/frontend_adapter.py`) maps ExpenseClaim + ExtractedReceipt +
+Decision into the frontend `Claim` shape. If `claims.json` is empty, the UI falls back to
+its built-in mock claims, so it always renders.
+
 ## Injectable inconsistencies
 
 The claim generator (`receipt_recon/claims.py`) can inject any of:

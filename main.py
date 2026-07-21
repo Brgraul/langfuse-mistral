@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from receipt_recon.claims import INCONSISTENCY_TYPES, generate_claim
@@ -93,6 +94,7 @@ def run_one(record, lf, inconsistency, seed, mock):
         _print_case(record.receipt_id, claim, extracted, decision, ext_eval, dec_eval)
         return {
             "receipt_id": record.receipt_id,
+            "image_path": record.image_path,
             "claim": claim.model_dump(),
             "extracted": extracted.model_dump(),
             "decision": decision.model_dump(),
@@ -111,6 +113,8 @@ def main():
     ap.add_argument("--mock", action="store_true",
                     help="skip Mistral; use ground truth in place of OCR")
     ap.add_argument("--out", default=None, help="write results JSON to this path")
+    ap.add_argument("--export-frontend", action="store_true",
+                    help="write src/data/claims.json + copy receipt images for the React app")
     args = ap.parse_args()
 
     lf = langfuse_client()
@@ -137,6 +141,12 @@ def main():
         with open(args.out, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nWrote results to {args.out}")
+
+    if args.export_frontend:
+        from receipt_recon.frontend_adapter import export_claims
+        root = os.path.dirname(os.path.abspath(__file__))
+        path = export_claims(results, root)
+        print(f"\nExported {len(results)} claim(s) for the frontend -> {path}")
 
     print("\nDone.")
     return 0

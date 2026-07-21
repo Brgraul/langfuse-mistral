@@ -13,6 +13,8 @@ venv/
 
 # Node / frontend
 node_modules/
+package-lock.json
+.playwright-mcp/
 .output/
 .tanstack/
 .wrangler/
