@@ -50,7 +50,7 @@ def _print_case(receipt_id, claim, extracted, decision, ext_eval, dec_eval):
 def run_one(record, lf, inconsistency, seed, mock):
     with lf.start_as_current_observation(
         name="reconcile-receipt", as_type="chain",
-        input={"receipt_id": record.receipt_id, "inconsistency": inconsistency},
+        input={"receipt_id": record.receipt_id, "inconsistency": inconsistency, "seed": seed, "mock": mock},
     ) as trace:
         # 1. OCR + extraction
         extracted = ocr_and_extract(
@@ -59,13 +59,19 @@ def run_one(record, lf, inconsistency, seed, mock):
             langfuse=lf,
         )
 
-        # 2. Synthetic claim
-        claim = generate_claim(
-            record.receipt_id, record.ground_truth,
-            inconsistency=inconsistency, seed=seed,
-        )
+        # 2. Synthetic claim (its own span so the injected inconsistency is auditable)
+        with lf.start_as_current_observation(
+            name="generate-claim", as_type="tool",
+            input={"receipt_id": record.receipt_id, "inconsistency": inconsistency, "seed": seed},
+        ) as cspan:
+            claim = generate_claim(
+                record.receipt_id, record.ground_truth,
+                inconsistency=inconsistency, seed=seed,
+            )
+            cspan.update(output=claim.model_dump())
 
-        # 3. Decision (deterministic)
+        # 3. Decision (deterministic) — one span per policy check that actually fired,
+        # plus the aggregate decision span, so every rule evaluated is individually visible.
         with lf.start_as_current_observation(
             name="reconcile-decision", as_type="tool",
             input={"claim": claim.model_dump(), "receipt": extracted.model_dump()},
@@ -73,7 +79,34 @@ def run_one(record, lf, inconsistency, seed, mock):
             decision = reconcile(claim, extracted)
             dspan.update(output=decision.model_dump())
 
-        # 4. Evaluation vs ground truth
+            for finding in decision.findings:
+                with lf.start_as_current_observation(
+                    name=f"check:{finding.type}", as_type="evaluator",
+                    input={"rule": finding.rule, "claim_amount": claim.claimed_amount, "receipt_total": extracted.total},
+                ) as fspan:
+                    fspan.update(output=finding.model_dump())
+                    try:
+                        fspan.score(
+                            name="severity",
+                            value={"info": 0.0, "warn": 0.5, "block": 1.0}.get(finding.severity, 0.5),
+                            data_type="NUMERIC",
+                            comment=finding.detail,
+                        )
+                    except Exception:
+                        pass
+
+            try:
+                dspan.score(name="num_findings", value=len(decision.findings), data_type="NUMERIC")
+                dspan.score(
+                    name="has_blocking_finding",
+                    value=1.0 if any(f.severity == "block" for f in decision.findings) else 0.0,
+                    data_type="NUMERIC",
+                )
+            except Exception:
+                pass
+
+        # 4. Evaluation vs ground truth (aggregate + per-field, so a single bad field
+        # doesn't get averaged away)
         ext_eval = extraction_accuracy(extracted, record.ground_truth)
         dec_eval = decision_correct(decision, claim)
 
@@ -85,8 +118,16 @@ def run_one(record, lf, inconsistency, seed, mock):
         # Scores on the trace
         try:
             trace.score(name="extraction_accuracy", value=ext_eval["score"], data_type="NUMERIC")
+            for field_name, field_result in ext_eval["fields"].items():
+                trace.score(
+                    name=f"extraction_accuracy.{field_name}",
+                    value=1.0 if field_result["match"] else 0.0,
+                    data_type="NUMERIC",
+                    comment=f"ground_truth={field_result['ground_truth']} extracted={field_result['extracted']}",
+                )
             if dec_eval:
                 trace.score(name="decision_correct", value=dec_eval["score"], data_type="NUMERIC")
+            trace.score(name="reimbursable_amount", value=decision.reimbursable_amount, data_type="NUMERIC")
         except Exception:
             pass
 

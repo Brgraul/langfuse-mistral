@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -26,6 +27,13 @@ from .ocr import ocr_and_extract
 from .schemas import Decision, ExpenseClaim, ExtractedReceipt
 
 app = FastAPI(title="Receipt Reconciliation API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -55,7 +63,12 @@ def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileResponse:
 
     with lf.start_as_current_observation(
         name="reconcile-receipt", as_type="chain",
-        input={"receipt_id": payload.receipt_id, "inconsistency": payload.inconsistency},
+        input={
+            "receipt_id": payload.receipt_id,
+            "inconsistency": payload.inconsistency,
+            "seed": payload.seed,
+            "mock": payload.mock,
+        },
     ) as trace:
         extracted = ocr_and_extract(
             payload.image_path,
@@ -63,15 +76,20 @@ def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileResponse:
             langfuse=lf,
         )
 
-        if payload.claim is not None:
-            claim = ExpenseClaim(**payload.claim)
-        else:
-            claim = generate_claim(
-                payload.receipt_id,
-                ground_truth or extracted,
-                inconsistency=payload.inconsistency,
-                seed=payload.seed,
-            )
+        with lf.start_as_current_observation(
+            name="generate-claim", as_type="tool",
+            input={"receipt_id": payload.receipt_id, "inconsistency": payload.inconsistency, "seed": payload.seed},
+        ) as cspan:
+            if payload.claim is not None:
+                claim = ExpenseClaim(**payload.claim)
+            else:
+                claim = generate_claim(
+                    payload.receipt_id,
+                    ground_truth or extracted,
+                    inconsistency=payload.inconsistency,
+                    seed=payload.seed,
+                )
+            cspan.update(output=claim.model_dump())
 
         with lf.start_as_current_observation(
             name="reconcile-decision", as_type="tool",
@@ -79,6 +97,32 @@ def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileResponse:
         ) as dspan:
             decision = reconcile(claim, extracted)
             dspan.update(output=decision.model_dump())
+
+            for finding in decision.findings:
+                with lf.start_as_current_observation(
+                    name=f"check:{finding.type}", as_type="evaluator",
+                    input={"rule": finding.rule, "claim_amount": claim.claimed_amount, "receipt_total": extracted.total},
+                ) as fspan:
+                    fspan.update(output=finding.model_dump())
+                    try:
+                        fspan.score(
+                            name="severity",
+                            value={"info": 0.0, "warn": 0.5, "block": 1.0}.get(finding.severity, 0.5),
+                            data_type="NUMERIC",
+                            comment=finding.detail,
+                        )
+                    except Exception:
+                        pass
+
+            try:
+                dspan.score(name="num_findings", value=len(decision.findings), data_type="NUMERIC")
+                dspan.score(
+                    name="has_blocking_finding",
+                    value=1.0 if any(f.severity == "block" for f in decision.findings) else 0.0,
+                    data_type="NUMERIC",
+                )
+            except Exception:
+                pass
 
         ext_eval = extraction_accuracy(extracted, ground_truth) if ground_truth else None
         dec_eval = decision_correct(decision, claim)
@@ -91,8 +135,16 @@ def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileResponse:
         try:
             if ext_eval:
                 trace.score(name="extraction_accuracy", value=ext_eval["score"], data_type="NUMERIC")
+                for field_name, field_result in ext_eval["fields"].items():
+                    trace.score(
+                        name=f"extraction_accuracy.{field_name}",
+                        value=1.0 if field_result["match"] else 0.0,
+                        data_type="NUMERIC",
+                        comment=f"ground_truth={field_result['ground_truth']} extracted={field_result['extracted']}",
+                    )
             if dec_eval:
                 trace.score(name="decision_correct", value=dec_eval["score"], data_type="NUMERIC")
+            trace.score(name="reimbursable_amount", value=decision.reimbursable_amount, data_type="NUMERIC")
         except Exception:
             pass
 

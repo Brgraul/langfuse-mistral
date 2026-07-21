@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -21,8 +21,16 @@ import {
   ArrowRight,
   Minus,
   Equal,
+  Loader2,
 } from "lucide-react";
-import receiptImg from "@/assets/receipt-mock.jpg";
+import {
+  fetchInconsistencies,
+  fetchSamples,
+  imageUrl,
+  reconcile,
+  type Sample,
+} from "@/lib/receipt-api";
+import { mapFindings, type Finding, type Severity } from "@/lib/map-findings";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -37,70 +45,10 @@ export const Route = createFileRoute("/")({
 });
 
 type Verdict = "approve" | "partial" | "reject" | "escalate";
-type Severity = "info" | "warn" | "block";
 
 type Line = { label: string; claim: string; ocr: string; match: boolean; issue?: string };
 type PolicyHit = { code: string; title: string; detail: string };
 type Evidence = { label: string; detail: string; done: boolean };
-
-type Finding =
-  | {
-      type: "total_mismatch";
-      severity: Severity;
-      impact: number;
-      claimedTotal: number;
-      receiptTotal: number;
-      note?: string;
-    }
-  | {
-      type: "cashprice_used";
-      severity: Severity;
-      impact: number;
-      totalPrice: number;
-      cashPrice: number;
-      claimed: number;
-    }
-  | {
-      type: "change_as_expense";
-      severity: Severity;
-      impact: number;
-      amountTendered: number;
-      receiptTotal: number;
-      change: number;
-    }
-  | {
-      type: "subtotal_math";
-      severity: Severity;
-      impact: number;
-      items: { label: string; price: number }[];
-      printedSubtotal: number;
-    }
-  | {
-      type: "tax_error";
-      severity: Severity;
-      impact: number;
-      mode: "double" | "missing";
-      subtotal: number;
-      rate: number;
-      printedTax: number;
-      claimedTax: number;
-    }
-  | {
-      type: "discount_ignored";
-      severity: Severity;
-      impact: number;
-      item: string;
-      listPrice: number;
-      discount: number;
-      netPrice: number;
-      claimedPrice: number;
-    }
-  | {
-      type: "policy_items";
-      severity: Severity;
-      impact: number;
-      items: { label: string; price: number; blocked: boolean; policyCode?: string }[];
-    };
 
 type Claim = {
   id: string;
@@ -121,245 +69,82 @@ type Claim = {
   image: string;
 };
 
-const claims: Claim[] = [
-  {
-    id: "EXP-10421",
-    employee: "Amelia Chen",
-    submitted: "Jul 18, 2026",
-    category: "Client Dinner",
-    merchantClaim: "The Copper Kettle",
-    totalClaim: 84.5,
-    totalOcr: 84.5,
+const money2 = (n: number | null | undefined) => (n == null ? "—" : `$${n.toFixed(2)}`);
+const approxEq = (a: number | null | undefined, b: number | null | undefined) =>
+  a != null && b != null && Math.abs(a - b) < 0.01;
+
+/** Build the UI's Claim shape from a live /reconcile response. */
+function buildClaim(sample: Sample, inconsistency: string, data: Awaited<ReturnType<typeof reconcile>>): Claim {
+  const { decision, extracted, claim } = data;
+
+  const lines: Line[] = [
+    {
+      label: "Merchant",
+      claim: claim.claimant,
+      ocr: extracted.merchant ?? "—",
+      match: true,
+    },
+    {
+      label: "Subtotal",
+      claim: money2(claim.claimed_amount - (claim.claimed_tax ?? 0)),
+      ocr: money2(extracted.subtotal),
+      match: true,
+    },
+    {
+      label: "Tax",
+      claim: money2(claim.claimed_tax),
+      ocr: money2(extracted.tax),
+      match: approxEq(claim.claimed_tax, extracted.tax),
+      issue: approxEq(claim.claimed_tax, extracted.tax) ? undefined : "Tax does not match the receipt",
+    },
+    {
+      label: "Discount",
+      claim: money2(claim.claimed_discount),
+      ocr: money2(extracted.discount),
+      match: approxEq(claim.claimed_discount, extracted.discount),
+      issue: approxEq(claim.claimed_discount, extracted.discount) ? undefined : "Discount does not match the receipt",
+    },
+    {
+      label: "Total",
+      claim: money2(claim.claimed_amount),
+      ocr: money2(extracted.total),
+      match: approxEq(claim.claimed_amount, extracted.total),
+      issue: approxEq(claim.claimed_amount, extracted.total)
+        ? undefined
+        : `Claim differs from receipt total by ${money2(Math.abs(claim.claimed_amount - (extracted.total ?? 0)))}`,
+    },
+  ];
+
+  const policies: PolicyHit[] = decision.findings.map((f) => ({
+    code: f.rule,
+    title: f.type.replace(/_/g, " "),
+    detail: f.detail,
+  }));
+
+  const evidence: Evidence[] = decision.evidence_needed
+    ? [{ label: decision.evidence_needed, detail: "Required before this claim can be closed out.", done: false }]
+    : [];
+
+  return {
+    id: claim.claim_id,
+    employee: claim.claimant,
+    submitted: "just now",
+    category: claim.policy_category,
+    merchantClaim: extracted.merchant ?? sample.receipt_id,
+    totalClaim: claim.claimed_amount,
+    totalOcr: extracted.total ?? 0,
     currency: "USD",
-    lines: [
-      { label: "Merchant", claim: "The Copper Kettle", ocr: "The Copper Kettle Restaurant", match: true },
-      { label: "Date", claim: "Jul 16, 2026", ocr: "Jul 16, 2026", match: true },
-      { label: "Subtotal", claim: "$76.82", ocr: "$76.82", match: true },
-      { label: "Tax", claim: "$7.68", ocr: "$7.68", match: true },
-      { label: "Total", claim: "$84.50", ocr: "$84.50", match: true },
-      { label: "Category", claim: "Client Dinner", ocr: "Restaurant", match: true },
-    ],
-    verdict: "approve",
-    reimburseAmount: 84.5,
-    rationale: [
-      "All extracted fields match the employee claim within tolerance.",
-      "Amount is within the $150 per-attendee client dinner cap.",
-      "No policy exceptions triggered.",
-    ],
-    policies: [],
-    evidence: [],
-    findings: [],
-    image: receiptImg,
-  },
-  {
-    id: "EXP-10422",
-    employee: "Marcus Alvarez",
-    submitted: "Jul 17, 2026",
-    category: "Team Lunch",
-    merchantClaim: "The Copper Kettle",
-    totalClaim: 142.0,
-    totalOcr: 118.25,
-    currency: "USD",
-    lines: [
-      { label: "Merchant", claim: "The Copper Kettle", ocr: "The Copper Kettle Restaurant", match: true },
-      { label: "Date", claim: "Jul 15, 2026", ocr: "Jul 15, 2026", match: true },
-      { label: "Subtotal", claim: "$107.50", ocr: "$107.50", match: true },
-      { label: "Tax", claim: "$21.60", ocr: "$10.75", match: false, issue: "Tax appears double-counted" },
-      { label: "Tip", claim: "$12.90", ocr: "—", match: false, issue: "Tip not itemized on receipt" },
-      { label: "Total", claim: "$142.00", ocr: "$118.25", match: false, issue: "Total exceeds OCR by $23.75" },
-    ],
-    verdict: "partial",
-    reimburseAmount: 118.25,
-    rationale: [
-      "Claim total exceeds the receipt total by $23.75.",
-      "Tax appears to have been added twice on the claim form.",
-      "Recommend reimbursing the documented amount of $118.25.",
-    ],
-    policies: [
-      { code: "T&E-4.2", title: "Documented totals only", detail: "Reimbursable amount cannot exceed the total printed on the receipt." },
-      { code: "T&E-5.1", title: "Tax accuracy", detail: "Tax reimbursed must equal the tax printed on the receipt." },
-    ],
-    evidence: [
-      { label: "Signed credit card slip", detail: "To justify the $12.90 tip line.", done: false },
-      { label: "Attendee list", detail: "Required for meals over $100.", done: true },
-    ],
-    findings: [
-      {
-        type: "total_mismatch",
-        severity: "block",
-        impact: 23.75,
-        claimedTotal: 142.0,
-        receiptTotal: 118.25,
-        note: "Claim exceeds printed receipt total.",
-      },
-      {
-        type: "tax_error",
-        severity: "warn",
-        impact: 10.85,
-        mode: "double",
-        subtotal: 107.5,
-        rate: 0.1,
-        printedTax: 10.75,
-        claimedTax: 21.6,
-      },
-    ],
-    image: receiptImg,
-  },
-  {
-    id: "EXP-10423",
-    employee: "Priya Natarajan",
-    submitted: "Jul 15, 2026",
-    category: "Fuel",
-    merchantClaim: "Shell Station #418",
-    totalClaim: 80.0,
-    totalOcr: 62.4,
-    currency: "USD",
-    lines: [
-      { label: "Merchant", claim: "Shell Station #418", ocr: "Shell Station #418", match: true },
-      { label: "Date", claim: "Jul 14, 2026", ocr: "Jul 14, 2026", match: true },
-      { label: "Purchase total", claim: "—", ocr: "$62.40", match: false, issue: "Claim used cash tendered, not purchase total" },
-      { label: "Amount tendered", claim: "$80.00", ocr: "$80.00", match: true },
-      { label: "Change", claim: "$17.60 (claimed)", ocr: "$17.60", match: false, issue: "Change was claimed as an expense" },
-      { label: "Total claimed", claim: "$80.00", ocr: "$62.40", match: false, issue: "Overclaim of $17.60" },
-    ],
-    verdict: "partial",
-    reimburseAmount: 62.4,
-    rationale: [
-      "Employee claimed the cash tendered ($80.00) rather than the purchase total ($62.40).",
-      "The $17.60 in change returned was included in the claim.",
-      "Reimburse the actual purchase total: $62.40.",
-    ],
-    policies: [
-      { code: "T&E-2.1", title: "Reimburse purchase total only", detail: "Reimbursement is based on the printed purchase total, never cash tendered or rounded amounts." },
-      { code: "T&E-2.3", title: "Change is not an expense", detail: "Change returned to the employee cannot be reimbursed." },
-    ],
-    evidence: [],
-    findings: [
-      {
-        type: "cashprice_used",
-        severity: "block",
-        impact: 17.6,
-        totalPrice: 62.4,
-        cashPrice: 80.0,
-        claimed: 80.0,
-      },
-      {
-        type: "change_as_expense",
-        severity: "block",
-        impact: 17.6,
-        amountTendered: 80.0,
-        receiptTotal: 62.4,
-        change: 17.6,
-      },
-    ],
-    image: receiptImg,
-  },
-  {
-    id: "EXP-10424",
-    employee: "Jordan Lee",
-    submitted: "Jul 19, 2026",
-    category: "Client Dinner",
-    merchantClaim: "The Copper Kettle",
-    totalClaim: 612.0,
-    totalOcr: 612.0,
-    currency: "USD",
-    lines: [
-      { label: "Merchant", claim: "The Copper Kettle", ocr: "The Copper Kettle Restaurant", match: true },
-      { label: "Date", claim: "Jul 12, 2026", ocr: "Jul 12, 2026", match: true },
-      { label: "Subtotal", claim: "$540.00", ocr: "$540.00", match: true },
-      { label: "Tax + Tip", claim: "$72.00", ocr: "$72.00", match: true },
-      { label: "Total", claim: "$612.00", ocr: "$612.00", match: true, issue: "Total exceeds VP approval threshold" },
-      { label: "Attendees", claim: "3 (internal)", ocr: "—", match: false, issue: "No external client listed" },
-    ],
-    verdict: "escalate",
-    reimburseAmount: 468.0,
-    rationale: [
-      "Receipt data matches claim but includes $144 of alcohol, which is non-reimbursable.",
-      "Amount exceeds the $500 VP-level approval threshold.",
-      "Category is Client Dinner but no external attendee was listed.",
-    ],
-    policies: [
-      { code: "T&E-6.3", title: "VP approval required over $500", detail: "Any single meal exceeding $500 requires written VP-level approval before reimbursement." },
-      { code: "T&E-2.7", title: "Alcohol non-reimbursable", detail: "Alcoholic beverages are excluded from meal reimbursements under corporate policy." },
-      { code: "T&E-4.5", title: "External attendee required", detail: "Client Dinner category requires at least one non-employee attendee to be listed." },
-    ],
-    evidence: [
-      { label: "VP written approval", detail: "Sign-off from department VP for meals over $500.", done: false },
-      { label: "External attendee names", detail: "Client name(s) and affiliation.", done: false },
-    ],
-    findings: [
-      {
-        type: "policy_items",
-        severity: "block",
-        impact: 144.0,
-        items: [
-          { label: "Entrées ×3", price: 210.0, blocked: false },
-          { label: "Appetizer platter", price: 64.0, blocked: false },
-          { label: "Bottle of red wine", price: 96.0, blocked: true, policyCode: "T&E-2.7 Alcohol" },
-          { label: "Cocktails ×2", price: 48.0, blocked: true, policyCode: "T&E-2.7 Alcohol" },
-          { label: "Desserts ×3", price: 50.0, blocked: false },
-          { label: "Coffee ×3", price: 22.0, blocked: false },
-          { label: "Tax + Tip", price: 122.0, blocked: false },
-        ],
-      },
-    ],
-    image: receiptImg,
-  },
-  {
-    id: "EXP-10425",
-    employee: "Sofia Rossi",
-    submitted: "Jul 20, 2026",
-    category: "Office Supplies",
-    merchantClaim: "Staples",
-    totalClaim: 138.5,
-    totalOcr: 121.3,
-    currency: "USD",
-    lines: [
-      { label: "Merchant", claim: "Staples", ocr: "Staples #221", match: true },
-      { label: "Date", claim: "Jul 19, 2026", ocr: "Jul 19, 2026", match: true },
-      { label: "Subtotal", claim: "$126.00", ocr: "$110.27", match: false, issue: "Line items don't sum to claimed subtotal" },
-      { label: "Tax", claim: "$12.50", ocr: "$11.03", match: false, issue: "Tax scales with subtotal error" },
-      { label: "Total", claim: "$138.50", ocr: "$121.30", match: false, issue: "Total inflated by ~$17.20" },
-    ],
-    verdict: "partial",
-    reimburseAmount: 121.3,
-    rationale: [
-      "Line items on the receipt sum to $110.27, not the claimed $126.00.",
-      "A promoted item was claimed at list price, ignoring the printed discount.",
-      "Reimburse against the printed receipt total of $121.30.",
-    ],
-    policies: [
-      { code: "T&E-3.2", title: "Line items must sum", detail: "Subtotal reimbursed must equal the sum of itemized line prices on the receipt." },
-      { code: "T&E-3.3", title: "Honor printed discounts", detail: "Items must be reimbursed at the net (post-discount) price shown on the receipt." },
-    ],
-    evidence: [],
-    findings: [
-      {
-        type: "subtotal_math",
-        severity: "warn",
-        impact: 5.73,
-        items: [
-          { label: "Notebooks ×4", price: 32.0 },
-          { label: "Pens ×2 packs", price: 14.5 },
-          { label: "Printer paper", price: 24.99 },
-          { label: "Toner cartridge", price: 38.78 },
-        ],
-        printedSubtotal: 110.27,
-      },
-      {
-        type: "discount_ignored",
-        severity: "warn",
-        impact: 10.0,
-        item: "Toner cartridge (promo)",
-        listPrice: 48.78,
-        discount: 10.0,
-        netPrice: 38.78,
-        claimedPrice: 48.78,
-      },
-    ],
-    image: receiptImg,
-  },
-];
+    lines,
+    verdict: decision.decision,
+    reimburseAmount: decision.reimbursable_amount,
+    rationale: [decision.rationale],
+    policies,
+    evidence,
+    findings: mapFindings(decision.findings),
+    image: imageUrl(sample),
+  };
+}
+
 
 const verdictConfig: Record<
   Verdict,
@@ -437,19 +222,66 @@ const severityTone: Record<Severity, { chip: string; dot: string; ring: string; 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 function Index() {
-  const [idx, setIdx] = useState(0);
+  const [samples, setSamples] = useState<Sample[]>([]);
+  const [inconsistencies, setInconsistencies] = useState<string[]>([]);
+  const [sampleIdx, setSampleIdx] = useState(0);
+  const [inconsistency, setInconsistency] = useState<string>("");
+  const [claim, setClaim] = useState<Claim | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<Verdict | null>(null);
-  const claim = claims[idx];
-  const suggested = claim.verdict;
+
+  useEffect(() => {
+    Promise.all([fetchSamples(), fetchInconsistencies()])
+      .then(([s, inc]) => {
+        setSamples(s);
+        setInconsistencies(inc);
+        setInconsistency(inc[0] ?? "none");
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const sample = samples[sampleIdx];
+
+  const runReconcile = useMemo(
+    () => async (targetSample: Sample, targetInconsistency: string) => {
+      setLoading(true);
+      setError(null);
+      setDecision(null);
+      try {
+        const data = await reconcile({
+          image_path: `data/samples/${targetSample.receipt_id}.png`,
+          receipt_id: targetSample.receipt_id,
+          mock: true,
+          ground_truth: targetSample.ground_truth,
+          inconsistency: targetInconsistency,
+        });
+        setClaim(buildClaim(targetSample, targetInconsistency, data));
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (sample && inconsistency) {
+      runReconcile(sample, inconsistency);
+    }
+  }, [sample, inconsistency, runReconcile]);
+
+  const goto = (n: number) => {
+    if (samples.length === 0) return;
+    setSampleIdx(((n % samples.length) + samples.length) % samples.length);
+  };
+
+  const suggested = claim?.verdict ?? "approve";
   const active = decision ?? suggested;
   const v = verdictConfig[active];
   const VIcon = v.icon;
-  const mismatches = claim.lines.filter((l) => !l.match);
-
-  const goto = (n: number) => {
-    setDecision(null);
-    setIdx(n);
-  };
+  const mismatches = claim?.lines.filter((l) => !l.match) ?? [];
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900">
@@ -461,24 +293,37 @@ function Index() {
             </div>
             <div>
               <h1 className="text-sm font-semibold tracking-tight">Receipt Review</h1>
-              <p className="text-xs text-neutral-500">Expense reimbursement queue</p>
+              <p className="text-xs text-neutral-500">Expense reimbursement queue — live via Mistral OCR + Langfuse</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <select
+              value={inconsistency}
+              onChange={(e) => setInconsistency(e.target.value)}
+              className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs text-neutral-700"
+            >
+              {inconsistencies.map((inc) => (
+                <option key={inc} value={inc}>
+                  {inc}
+                </option>
+              ))}
+            </select>
             <button
-              onClick={() => goto((idx - 1 + claims.length) % claims.length)}
+              onClick={() => goto(sampleIdx - 1)}
               className="flex h-9 w-9 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-700 transition hover:bg-neutral-50"
               aria-label="Previous"
+              disabled={samples.length === 0}
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
             <span className="text-xs text-neutral-500 tabular-nums">
-              {idx + 1} / {claims.length}
+              {samples.length === 0 ? "0 / 0" : `${sampleIdx + 1} / ${samples.length}`}
             </span>
             <button
-              onClick={() => goto((idx + 1) % claims.length)}
+              onClick={() => goto(sampleIdx + 1)}
               className="flex h-9 w-9 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-700 transition hover:bg-neutral-50"
               aria-label="Next"
+              disabled={samples.length === 0}
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -486,7 +331,23 @@ function Index() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1400px] px-6 py-8">
+      {error && (
+        <div className="mx-auto max-w-[1400px] px-6 pt-4">
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error} — is the backend running at {" "}
+            <code className="font-mono">uv run uvicorn receipt_recon.api:app --port 8000</code>?
+          </div>
+        </div>
+      )}
+
+      {loading && !claim && (
+        <div className="flex items-center justify-center gap-2 py-24 text-neutral-500">
+          <Loader2 className="h-5 w-5 animate-spin" /> Running reconciliation…
+        </div>
+      )}
+
+      {claim && (
+      <main className="mx-auto max-w-[1400px] px-6 py-8" aria-busy={loading}>
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-neutral-500">
@@ -735,6 +596,7 @@ function Index() {
           </div>
         </div>
       </main>
+      )}
     </div>
   );
 }

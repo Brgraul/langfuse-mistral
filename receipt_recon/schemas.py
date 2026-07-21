@@ -80,6 +80,61 @@ class ReceiptRecord(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Finding — one structured, typed observation from a single policy check.
+# Carries enough type-specific numeric detail for the frontend to render a
+# proper breakdown (not just a rule id + free-text description).
+# --------------------------------------------------------------------------- #
+FINDING_TYPES = (
+    "total_mismatch",
+    "cashprice_used",
+    "change_as_expense",
+    "subtotal_math",
+    "tax_error",
+    "discount_ignored",
+    "policy_items",
+    "over_category_cap",
+    "missing_evidence",
+    "escalation_threshold",
+)
+
+
+class FindingItem(BaseModel):
+    label: str
+    price: float = 0.0
+    blocked: bool = False
+    policy_code: Optional[str] = None
+
+
+class Finding(BaseModel):
+    type: str                              # one of FINDING_TYPES
+    rule: str                              # id from POLICY_RULES
+    severity: str = "warn"                 # info | warn | block
+    detail: str = ""                       # human-readable summary
+    impact: float = 0.0                    # dollar amount this finding affects
+
+    # Type-specific fields — only the ones relevant to `type` are populated.
+    claimed_total: Optional[float] = None
+    receipt_total: Optional[float] = None
+    cash_price: Optional[float] = None
+    claimed_amount: Optional[float] = None
+    change: Optional[float] = None
+    amount_tendered: Optional[float] = None
+    items: Optional[List[FindingItem]] = None
+    printed_subtotal: Optional[float] = None
+    tax_mode: Optional[str] = None          # "double" | "missing"
+    printed_tax: Optional[float] = None
+    claimed_tax: Optional[float] = None
+    tax_rate: Optional[float] = None
+    subtotal: Optional[float] = None
+    item_name: Optional[str] = None
+    list_price: Optional[float] = None
+    discount: Optional[float] = None
+    net_price: Optional[float] = None
+    claimed_price: Optional[float] = None
+    cap: Optional[float] = None
+
+
+# --------------------------------------------------------------------------- #
 # Decision — the final reimbursement verdict (Person D).
 # --------------------------------------------------------------------------- #
 VALID_DECISIONS = ("approve", "partial", "reject", "escalate")
@@ -92,3 +147,4 @@ class Decision(BaseModel):
     policy_rule: Optional[str] = None       # id from POLICY_RULES that was triggered
     evidence_needed: Optional[str] = None
     rationale: str = ""
+    findings: List[Finding] = Field(default_factory=list)

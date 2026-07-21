@@ -55,16 +55,24 @@ def run_ocr(image_path: str, langfuse=None) -> str:
             document={"type": "image_url", "image_url": data_url},
             include_image_base64=False,
         )
-        return "\n\n".join(page.markdown for page in resp.pages)
+        text = "\n\n".join(page.markdown for page in resp.pages)
+        usage = getattr(resp, "usage_info", None)
+        return text, resp, usage
 
     if langfuse is None:
-        return _call()
+        text, _, _ = _call()
+        return text
     with langfuse.start_as_current_observation(
         name="mistral-ocr", as_type="generation", model=OCR_MODEL,
         input={"image_path": os.path.basename(image_path)},
+        model_parameters={"include_image_base64": False},
     ) as gen:
-        text = _call()
-        gen.update(output=text)
+        text, resp, usage = _call()
+        gen.update(
+            output=text,
+            metadata={"num_pages": len(resp.pages)},
+            usage_details={"pages_processed": getattr(usage, "pages_processed", len(resp.pages))} if usage else None,
+        )
         return text
 
 
@@ -82,17 +90,29 @@ def extract_fields(ocr_text: str, langfuse=None) -> ExtractedReceipt:
             response_format={"type": "json_object"},
             temperature=0,
         )
-        return resp.choices[0].message.content
+        return resp.choices[0].message.content, getattr(resp, "usage", None)
 
     if langfuse is None:
-        raw = _call()
+        raw, _ = _call()
     else:
         with langfuse.start_as_current_observation(
             name="extract-fields", as_type="generation", model=EXTRACT_MODEL,
             input={"ocr_text": ocr_text},
+            model_parameters={"temperature": 0, "response_format": "json_object"},
         ) as gen:
-            raw = _call()
-            gen.update(output=raw)
+            raw, usage = _call()
+            gen.update(
+                output=raw,
+                usage_details=(
+                    {
+                        "input": getattr(usage, "prompt_tokens", 0),
+                        "output": getattr(usage, "completion_tokens", 0),
+                        "total": getattr(usage, "total_tokens", 0),
+                    }
+                    if usage
+                    else None
+                ),
+            )
 
     data = json.loads(raw)
     receipt = ExtractedReceipt(**data)

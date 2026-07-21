@@ -19,6 +19,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+package-lock.json
 
 # Data caches / outputs
 .cache/
