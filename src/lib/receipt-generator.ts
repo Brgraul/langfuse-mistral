@@ -1,10 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import {
-  buildClaimFromCordRow,
+  buildClaimFromReceipt,
   type Claim,
-  type CordDatasetRow,
+  type ReceiptSource,
 } from "./receipt-generator-core";
+import { MistralOcrError, recognizeReceiptWithMistral } from "./mistral-ocr";
 
 const DATASET = "naver-clova-ix/cord-v2";
 const ROWS_ENDPOINT = "https://datasets-server.huggingface.co/rows";
@@ -17,13 +18,24 @@ type HuggingFaceRowsResponse = {
     row_idx?: unknown;
     row?: {
       image?: { src?: unknown; width?: unknown; height?: unknown };
-      ground_truth?: unknown;
     };
   }>;
 };
 
+type CordImageRow = Pick<
+  ReceiptSource,
+  "split" | "rowIndex" | "imageUrl" | "imageWidth" | "imageHeight"
+>;
+
 export const getRandomReceiptClaim = createServerFn({ method: "POST" }).handler(
   async (): Promise<Claim> => {
+    const apiKey = process.env.MISTRAL_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error(
+        "MISTRAL_API_KEY is required for live receipt recognition. Add it to .env or the deployment environment.",
+      );
+    }
+
     let lastError: unknown;
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
@@ -31,24 +43,31 @@ export const getRandomReceiptClaim = createServerFn({ method: "POST" }).handler(
       const rowIndex = randomIndex(ROWS_PER_SPLIT);
 
       try {
-        const row = await fetchCordRow(split, rowIndex);
-        return buildClaimFromCordRow(row);
+        const row = await fetchCordImage(split, rowIndex);
+        const ocr = await recognizeReceiptWithMistral(row.imageUrl, apiKey);
+        return buildClaimFromReceipt({
+          ...row,
+          extractedReceipt: ocr.receipt,
+          ocrModel: ocr.model,
+          ocrConfidence: ocr.confidence,
+        });
       } catch (error) {
+        if (error instanceof MistralOcrError && !error.retryable) throw error;
         lastError = error;
       }
     }
 
     const detail = lastError instanceof Error ? `: ${lastError.message}` : "";
     throw new Error(
-      `Unable to load a usable CORD v2 receipt after ${MAX_ATTEMPTS} attempts${detail}`,
+      `Unable to recognize a usable CORD v2 receipt after ${MAX_ATTEMPTS} attempts${detail}`,
     );
   },
 );
 
-async function fetchCordRow(
+async function fetchCordImage(
   split: (typeof SPLITS)[number],
   rowIndex: number,
-): Promise<CordDatasetRow> {
+): Promise<CordImageRow> {
   const url = new URL(ROWS_ENDPOINT);
   url.searchParams.set("dataset", DATASET);
   url.searchParams.set("config", "default");
@@ -73,26 +92,10 @@ async function fetchCordRow(
   const imageUrl = typeof image?.src === "string" ? image.src : null;
   const imageWidth = typeof image?.width === "number" ? image.width : null;
   const imageHeight = typeof image?.height === "number" ? image.height : null;
-  const groundTruthValue = result?.row?.ground_truth;
 
-  if (
-    !result ||
-    !imageUrl ||
-    !imageWidth ||
-    !imageHeight ||
-    typeof groundTruthValue !== "string"
-  ) {
+  if (!result || !imageUrl || !imageWidth || !imageHeight) {
     throw new Error(
       `Hugging Face returned an incomplete row for ${split}/${rowIndex}`,
-    );
-  }
-
-  let groundTruth: unknown;
-  try {
-    groundTruth = JSON.parse(groundTruthValue);
-  } catch {
-    throw new Error(
-      `CORD ground truth is invalid JSON for ${split}/${rowIndex}`,
     );
   }
 
@@ -102,7 +105,6 @@ async function fetchCordRow(
     imageUrl,
     imageWidth,
     imageHeight,
-    groundTruth,
   };
 }
 

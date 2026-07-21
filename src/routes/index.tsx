@@ -39,7 +39,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Review synthetic employee claims against paired CORD v2 receipt ground truth.",
+          "Review synthetic employee claims against Mistral OCR extraction of live CORD v2 receipts.",
       },
       {
         property: "og:title",
@@ -48,7 +48,7 @@ export const Route = createFileRoute("/")({
       {
         property: "og:description",
         content:
-          "Review synthetic employee claims against paired CORD v2 receipt ground truth.",
+          "Review synthetic employee claims against Mistral OCR extraction of live CORD v2 receipts.",
       },
     ],
   }),
@@ -334,7 +334,12 @@ function Index() {
                 <span className="font-mono">
                   {claim.provenance.split}/{claim.provenance.rowIndex}
                 </span>
-                <span>Hugging Face · paired annotation</span>
+                <span>
+                  {claim.provenance.ocrModel}
+                  {claim.provenance.ocrConfidence !== null
+                    ? ` · ${Math.round(claim.provenance.ocrConfidence * 100)}% confidence`
+                    : ""}
+                </span>
               </div>
             </Card>
           </section>
@@ -344,13 +349,13 @@ function Index() {
             <Card>
               <SectionTitle
                 icon={<ScanLine className="h-3.5 w-3.5" />}
-                label="Claim vs. dataset ground truth"
+                label="Claim vs. Mistral OCR"
               />
               <div className="overflow-hidden rounded-lg border border-neutral-200">
                 <div className="grid grid-cols-12 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-neutral-500">
                   <div className="col-span-3">Field</div>
                   <div className="col-span-4">Employee claim</div>
-                  <div className="col-span-4">CORD ground truth</div>
+                  <div className="col-span-4">Mistral OCR</div>
                   <div className="col-span-1 text-right">Match</div>
                 </div>
                 {claim.lines.map((l, i) => (
@@ -370,7 +375,7 @@ function Index() {
                       <div
                         className={`font-mono text-xs ${l.match ? "text-neutral-700" : "text-rose-700"}`}
                       >
-                        {l.truth}
+                        {l.extracted}
                       </div>
                       {l.issue && (
                         <div className="mt-0.5 text-[11px] text-rose-600">
@@ -392,9 +397,9 @@ function Index() {
               <div className="mt-4 grid grid-cols-3 gap-3">
                 <Stat label="Claimed" value={money(claim.totalClaim)} />
                 <Stat
-                  label="Ground truth"
-                  value={money(claim.totalTruth)}
-                  delta={claim.totalClaim - claim.totalTruth}
+                  label="OCR total"
+                  value={money(claim.totalOcr)}
+                  delta={claim.totalClaim - claim.totalOcr}
                 />
                 <Stat label="Mismatches" value={`${mismatches.length}`} muted />
               </div>

@@ -2,8 +2,10 @@
 
 An interactive receipt-review frontend backed by live rows from the
 [CORD v2](https://huggingface.co/datasets/naver-clova-ix/cord-v2) dataset on Hugging Face.
-Each generated review uses the real image and `ground_truth` annotation from the same
-dataset row, then deliberately perturbs the annotation into a synthetic employee claim.
+Each generated review sends the real receipt image to `mistral-ocr-latest`, extracts the
+same receipt fields represented by CORD's annotations, then deliberately perturbs the OCR
+result into a synthetic employee claim. The web runtime does not read the Hugging Face
+`ground_truth` column.
 There are no static claims or bundled mock receipts in the web workflow.
 
 See [PLAN.md](./PLAN.md) for the team split.
@@ -11,28 +13,32 @@ See [PLAN.md](./PLAN.md) for the team split.
 ## Web workflow
 
 ```
-fetch one paired CORD row (image + ground_truth)
-  -> normalize the annotation
+fetch one CORD receipt image
+  -> Mistral OCR with a strict receipt JSON schema
+  -> normalize the OCR annotation
   -> choose an applicable perturbation
-  -> render synthetic claim vs original ground truth
+  -> render synthetic claim vs Mistral OCR
   -> recommend reimbursement
 ```
 
 The Node backend is a TanStack Start server function in
 `src/lib/receipt-generator.ts`. It fetches random validation/test rows from the Hugging
-Face datasets server, retries transient failures, and passes the paired row to the pure
-generator in `src/lib/receipt-generator-core.ts`. Clicking the next arrow fetches and
-generates another receipt on demand while retaining earlier receipts in the browser session.
+Face datasets server, sends each image to the Mistral OCR endpoint, and passes the structured
+annotation to the pure generator in `src/lib/receipt-generator-core.ts`. Clicking the next
+arrow fetches and recognizes another receipt on demand while retaining earlier receipts in
+the browser session.
 
 ## Setup
 
 ```bash
 bun install
+cp .env.example .env        # set MISTRAL_API_KEY
 bun run dev
 ```
 
-No API key is required for the web workflow. It requires outbound access to
-`datasets-server.huggingface.co`.
+The key is read only inside the server function and is never exposed to the client bundle.
+The web workflow requires outbound access to `datasets-server.huggingface.co` and
+`api.mistral.ai`.
 
 ## Validate
 
@@ -57,26 +63,29 @@ python main.py
 
 The web generator can inject any applicable perturbation for the selected receipt:
 
-| type | what it does | expected decision |
-|---|---|---|
-| `total-mismatch` | inflates the claimed total | partial |
-| `cash-as-total` | claims cash tendered instead of amount owed | partial |
-| `change-claimed` | adds returned change to the claim | partial |
-| `items-mismatch-subtotal` | inflates a line item so the claim no longer reconciles | escalate |
-| `tax-doubled` | claims tax twice | partial |
-| `pre-discount-price` | ignores a printed discount | partial |
-| `non-reimbursable` | adds an alcohol item absent from the receipt | partial |
+| type                      | what it does                                           | expected decision |
+| ------------------------- | ------------------------------------------------------ | ----------------- |
+| `total-mismatch`          | inflates the claimed total                             | partial           |
+| `cash-as-total`           | claims cash tendered instead of amount owed            | partial           |
+| `change-claimed`          | adds returned change to the claim                      | partial           |
+| `items-mismatch-subtotal` | inflates a line item so the claim no longer reconciles | escalate          |
+| `tax-doubled`             | claims tax twice                                       | partial           |
+| `pre-discount-price`      | ignores a printed discount                             | partial           |
+| `non-reimbursable`        | adds an alcohol item absent from the receipt           | partial           |
 
 ## Module map
 
-| file | owner | role |
-|---|---|---|
-| `receipt_recon/schemas.py` | shared | data contracts (frozen interface) |
-| `receipt_recon/config.py` | A | env + Mistral/Langfuse clients (Langfuse no-op fallback) |
-| `receipt_recon/dataset.py` | A | CORD v2 loader + ground-truth normalizer |
-| `receipt_recon/ocr.py` | B | Mistral OCR + structured extraction (`--mock` aware) |
-| `receipt_recon/claims.py` | C | synthetic claim generator |
-| `receipt_recon/policy.py` | C | reimbursement policy ruleset |
-| `receipt_recon/decision.py` | D | comparison + decision engine (deterministic) |
-| `receipt_recon/evaluation.py` | D | scoring vs ground truth |
-| `main.py` | A | orchestrator + root trace |
+| file                                | owner       | role                                                                |
+| ----------------------------------- | ----------- | ------------------------------------------------------------------- |
+| `src/lib/mistral-ocr.ts`            | web backend | Mistral OCR request + strict receipt annotation schema              |
+| `src/lib/receipt-generator.ts`      | web backend | live image selection, retries, server-only API key access           |
+| `src/lib/receipt-generator-core.ts` | web backend | OCR normalization, claim perturbation, reimbursement recommendation |
+| `receipt_recon/schemas.py`          | shared      | data contracts (frozen interface)                                   |
+| `receipt_recon/config.py`           | A           | env + Mistral/Langfuse clients (Langfuse no-op fallback)            |
+| `receipt_recon/dataset.py`          | A           | CORD v2 loader + ground-truth normalizer                            |
+| `receipt_recon/ocr.py`              | B           | Mistral OCR + structured extraction (`--mock` aware)                |
+| `receipt_recon/claims.py`           | C           | synthetic claim generator                                           |
+| `receipt_recon/policy.py`           | C           | reimbursement policy ruleset                                        |
+| `receipt_recon/decision.py`         | D           | comparison + decision engine (deterministic)                        |
+| `receipt_recon/evaluation.py`       | D           | scoring vs ground truth                                             |
+| `main.py`                           | A           | orchestrator + root trace                                           |

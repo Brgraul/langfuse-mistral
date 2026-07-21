@@ -4,7 +4,7 @@ export type Severity = "info" | "warn" | "block";
 export type ComparisonLine = {
   label: string;
   claim: string;
-  truth: string;
+  extracted: string;
   match: boolean;
   issue?: string;
 };
@@ -83,7 +83,7 @@ export type Claim = {
   category: string;
   merchantClaim: string;
   totalClaim: number;
-  totalTruth: number;
+  totalOcr: number;
   currency: "IDR";
   lines: ComparisonLine[];
   verdict: Verdict;
@@ -101,19 +101,40 @@ export type Claim = {
     imageWidth: number;
     imageHeight: number;
     permutation: Permutation;
+    ocrModel: string;
+    ocrConfidence: number | null;
   };
 };
 
-export type CordDatasetRow = {
+export type OcrExtractedReceipt = {
+  merchant: string | null;
+  items: Array<{
+    name: string;
+    quantity: number;
+    unit_price: number | null;
+    total_price: number;
+    discount: number | null;
+  }>;
+  subtotal: number | null;
+  service_charge: number | null;
+  tax: number | null;
+  discount: number | null;
+  total: number | null;
+  payment_method: string | null;
+  cash_tendered: number | null;
+  change: number | null;
+};
+
+export type ReceiptSource = {
   split: "validation" | "test";
   rowIndex: number;
   imageUrl: string;
   imageWidth: number;
   imageHeight: number;
-  groundTruth: unknown;
+  extractedReceipt: OcrExtractedReceipt;
+  ocrModel: string;
+  ocrConfidence: number | null;
 };
-
-type RawRecord = Record<string, unknown>;
 
 type ReceiptItem = {
   name: string;
@@ -126,6 +147,7 @@ type ReceiptItem = {
 
 type NormalizedReceipt = {
   imageId: number | string;
+  merchant: string | null;
   items: ReceiptItem[];
   subtotal: number;
   tax: number;
@@ -171,15 +193,15 @@ const IDR = new Intl.NumberFormat("id-ID", {
   maximumFractionDigits: 0,
 });
 
-export function buildClaimFromCordRow(
-  row: CordDatasetRow,
+export function buildClaimFromReceipt(
+  row: ReceiptSource,
   random: () => number = Math.random,
   forcedPermutation?: Permutation,
 ): Claim {
-  const receipt = normalizeGroundTruth(row.groundTruth, row.rowIndex);
+  const receipt = normalizeExtractedReceipt(row.extractedReceipt, row.rowIndex);
   if (receipt.total <= 0) {
     throw new Error(
-      `CORD row ${row.split}/${row.rowIndex} has no usable total`,
+      `Mistral OCR found no usable total for CORD row ${row.split}/${row.rowIndex}`,
     );
   }
 
@@ -226,8 +248,8 @@ export function buildClaimFromCordRow(
       };
       rationale = [
         `The claim uses cash tendered (${formatMoney(cash)}) instead of the purchase total.`,
-        `The paired CORD ground truth records a total of ${formatMoney(receipt.total)}.`,
-        "Reimburse only the verified purchase total.",
+        `Mistral OCR extracted a purchase total of ${formatMoney(receipt.total)}.`,
+        "Reimburse only the OCR-verified purchase total.",
       ];
       policies = [
         policy(
@@ -252,7 +274,7 @@ export function buildClaimFromCordRow(
       };
       rationale = [
         `The synthetic claim adds returned change (${formatMoney(change)}) to the expense.`,
-        `The paired ground truth records a purchase total of ${formatMoney(receipt.total)}.`,
+        `Mistral OCR extracted a purchase total of ${formatMoney(receipt.total)}.`,
         "Deduct the returned change from reimbursement.",
       ];
       policies = [
@@ -286,7 +308,7 @@ export function buildClaimFromCordRow(
       verdict = "escalate";
       rationale = [
         "A line item was inflated in the synthetic claim, so its items no longer reconcile to the printed subtotal.",
-        `The paired ground truth total remains ${formatMoney(receipt.total)}.`,
+        `The Mistral OCR total remains ${formatMoney(receipt.total)}.`,
         "Request a corrected itemized claim before reimbursement.",
       ];
       policies = [
@@ -322,7 +344,7 @@ export function buildClaimFromCordRow(
       rationale = [
         `The synthetic claim doubles the printed tax from ${formatMoney(receipt.tax)} to ${formatMoney(claimedTax)}.`,
         `This overstates the total by ${formatMoney(receipt.tax)}.`,
-        "Reimburse the total recorded in the paired ground truth.",
+        "Reimburse the total extracted by Mistral OCR.",
       ];
       policies = [
         policy(
@@ -356,7 +378,7 @@ export function buildClaimFromCordRow(
       };
       rationale = [
         `The synthetic claim ignores a printed discount of ${formatMoney(discount)}.`,
-        `The paired ground truth records a net total of ${formatMoney(receipt.total)}.`,
+        `Mistral OCR extracted a net total of ${formatMoney(receipt.total)}.`,
         "Reimburse the post-discount amount only.",
       ];
       policies = [
@@ -393,7 +415,7 @@ export function buildClaimFromCordRow(
         })),
       };
       rationale = [
-        "The synthetic claim adds an alcohol item that is absent from the paired receipt ground truth.",
+        "The synthetic claim adds an alcohol item that is absent from the Mistral OCR extraction.",
         `Exclude ${formatMoney(blocked.totalPrice)} from reimbursement.`,
         "Reimburse only the legitimate receipt total.",
       ];
@@ -416,12 +438,12 @@ export function buildClaimFromCordRow(
         impact,
         claimedTotal,
         receiptTotal: receipt.total,
-        note: "The claim total was deliberately inflated from the paired CORD ground truth.",
+        note: "The claim total was deliberately inflated from the Mistral OCR extraction.",
       };
       rationale = [
-        `The synthetic claim exceeds the paired ground truth by ${formatMoney(impact)}.`,
-        `The verified receipt total is ${formatMoney(receipt.total)}.`,
-        "Reimburse only the verified receipt total.",
+        `The synthetic claim exceeds the Mistral OCR total by ${formatMoney(impact)}.`,
+        `The OCR-verified receipt total is ${formatMoney(receipt.total)}.`,
+        "Reimburse only the OCR-verified receipt total.",
       ];
       policies = [
         policy(
@@ -449,9 +471,9 @@ export function buildClaimFromCordRow(
     employee,
     submitted,
     category,
-    merchantClaim: `CORD v2 receipt #${receipt.imageId}`,
+    merchantClaim: receipt.merchant ?? `CORD v2 receipt #${receipt.imageId}`,
     totalClaim: claimedTotal,
-    totalTruth: receipt.total,
+    totalOcr: receipt.total,
     currency: "IDR",
     lines,
     verdict,
@@ -469,71 +491,58 @@ export function buildClaimFromCordRow(
       imageWidth: row.imageWidth,
       imageHeight: row.imageHeight,
       permutation,
+      ocrModel: row.ocrModel,
+      ocrConfidence: row.ocrConfidence,
     },
   };
 }
 
-function normalizeGroundTruth(
-  value: unknown,
+function normalizeExtractedReceipt(
+  value: OcrExtractedReceipt,
   fallbackImageId: number,
 ): NormalizedReceipt {
-  const root = asRecord(value);
-  const gtParse = asRecord(root.gt_parse);
-  const meta = asRecord(root.meta);
-  const menuValue = gtParse.menu;
-  const menu = Array.isArray(menuValue)
-    ? menuValue
-    : menuValue
-      ? [menuValue]
-      : [];
-  const items = menu.flatMap((entry) => {
-    const item = asRecord(entry);
-    if (Object.keys(item).length === 0) return [];
-    const quantity = parseQuantity(item.cnt);
-    const listPrice = parseAmount(item.price) ?? 0;
-    const discount = Math.abs(parseAmount(item.discountprice) ?? 0);
-    const totalPrice = Math.max(0, listPrice - discount);
-    const unitPrice =
-      parseAmount(item.unitprice) ??
-      (quantity ? listPrice / quantity : listPrice);
-    return [
-      {
-        name: String(item.nm ?? "Unknown item").trim() || "Unknown item",
-        quantity,
-        unitPrice,
-        totalPrice,
-        discount,
-        listPrice,
-      },
-    ];
+  const items = value.items.map((item) => {
+    const quantity = positiveNumber(item.quantity, 1);
+    const totalPrice = nonNegativeNumber(item.total_price, 0);
+    const discount = nonNegativeNumber(item.discount, 0);
+    const unitPrice = nonNegativeNumber(
+      item.unit_price,
+      quantity ? totalPrice / quantity : totalPrice,
+    );
+    return {
+      name: item.name.trim() || "Unknown item",
+      quantity,
+      unitPrice,
+      totalPrice,
+      discount,
+      listPrice: totalPrice + discount,
+    };
   });
 
-  const subTotal = firstRecord(gtParse.sub_total);
-  const totalRecord = firstRecord(gtParse.total);
   const itemSum = sumItems(items);
-  const subtotal = parseAmount(subTotal.subtotal_price) ?? itemSum;
-  const tax = parseAmount(subTotal.tax_price) ?? 0;
-  const service = parseAmount(subTotal.service_price) ?? 0;
-  const discount = Math.abs(
-    parseAmount(subTotal.discount_price) ??
-      items.reduce((sum, item) => sum + item.discount, 0),
+  const subtotal = nonNegativeNumber(value.subtotal, itemSum);
+  const tax = nonNegativeNumber(value.tax, 0);
+  const service = nonNegativeNumber(value.service_charge, 0);
+  const discount = nonNegativeNumber(
+    value.discount,
+    items.reduce((sum, item) => sum + item.discount, 0),
   );
-  const total =
-    parseAmount(totalRecord.total_price) ?? subtotal + tax + service - discount;
+  const total = nonNegativeNumber(
+    value.total,
+    subtotal + tax + service - discount,
+  );
 
   return {
-    imageId:
-      typeof meta.image_id === "number" || typeof meta.image_id === "string"
-        ? meta.image_id
-        : fallbackImageId,
+    imageId: fallbackImageId,
+    merchant: value.merchant?.trim() || null,
     items,
     subtotal,
     tax,
     service,
     discount,
     total,
-    cash: parseAmount(totalRecord.cashprice),
-    change: parseAmount(totalRecord.changeprice),
+    cash: nullableNonNegativeNumber(value.cash_tendered),
+    change: nullableNonNegativeNumber(value.change),
   };
 }
 
@@ -565,27 +574,27 @@ function buildComparisonLines(
   },
 ): ComparisonLine[] {
   const itemSum = sumItems(claimItems);
-  const truthItemSum = sumItems(receipt.items);
+  const ocrItemSum = sumItems(receipt.items);
   const lines: ComparisonLine[] = [
     {
       label: "Dataset row",
       claim: `${claim.split} #${claim.rowIndex}`,
-      truth: `${claim.split} #${claim.rowIndex}`,
+      extracted: `${claim.split} #${claim.rowIndex}`,
       match: true,
     },
     comparison(
       "Line items",
       `${claimItems.length} · ${formatMoney(itemSum)}`,
-      `${receipt.items.length} · ${formatMoney(truthItemSum)}`,
-      claimItems.length === receipt.items.length && itemSum === truthItemSum,
-      "Claimed items differ from the paired annotation",
+      `${receipt.items.length} · ${formatMoney(ocrItemSum)}`,
+      claimItems.length === receipt.items.length && itemSum === ocrItemSum,
+      "Claimed items differ from the Mistral OCR extraction",
     ),
     comparison(
       "Subtotal",
       formatMoney(claim.subtotal),
       formatMoney(receipt.subtotal),
       claim.subtotal === receipt.subtotal,
-      "Claimed subtotal differs from ground truth",
+      "Claimed subtotal differs from Mistral OCR",
     ),
   ];
   if (receipt.tax > 0 || claim.tax > 0) {
@@ -595,7 +604,7 @@ function buildComparisonLines(
         formatMoney(claim.tax),
         formatMoney(receipt.tax),
         claim.tax === receipt.tax,
-        "Claimed tax differs from ground truth",
+        "Claimed tax differs from Mistral OCR",
       ),
     );
   }
@@ -614,7 +623,7 @@ function buildComparisonLines(
     lines.push({
       label: "Cash tendered",
       claim: formatMoney(receipt.cash),
-      truth: formatMoney(receipt.cash),
+      extracted: formatMoney(receipt.cash),
       match: true,
     });
   }
@@ -625,7 +634,7 @@ function buildComparisonLines(
         claim.permutation === "change-claimed"
           ? `${formatMoney(receipt.change)} included`
           : formatMoney(receipt.change),
-      truth: `${formatMoney(receipt.change)} returned`,
+      extracted: `${formatMoney(receipt.change)} returned`,
       match: claim.permutation !== "change-claimed",
       ...(claim.permutation === "change-claimed"
         ? { issue: "Returned change was added to the expense" }
@@ -638,7 +647,7 @@ function buildComparisonLines(
       formatMoney(claim.total),
       formatMoney(receipt.total),
       claim.total === receipt.total,
-      "Claim total differs from the paired ground truth",
+      "Claim total differs from Mistral OCR",
     ),
   );
   return lines;
@@ -647,46 +656,33 @@ function buildComparisonLines(
 function comparison(
   label: string,
   claim: string,
-  truth: string,
+  extracted: string,
   match: boolean,
   issue: string,
 ): ComparisonLine {
-  return { label, claim, truth, match, ...(!match ? { issue } : {}) };
+  return { label, claim, extracted, match, ...(!match ? { issue } : {}) };
 }
 
 function policy(code: string, title: string, detail: string): PolicyHit {
   return { code, title, detail };
 }
 
-function parseAmount(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value))
-    return Math.round(value);
-  if (value === null || value === undefined) return null;
-  const raw = String(value).trim();
-  if (!raw) return null;
-  const sign = raw.startsWith("-") ? -1 : 1;
-  const digits = raw.replace(/\D/g, "");
-  return digits ? sign * Number(digits) : null;
+function positiveNumber(value: number | null, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
 }
 
-function parseQuantity(value: unknown): number {
-  const match = String(value ?? "").match(/\d+(?:\.\d+)?/);
-  const quantity = match ? Number(match[0]) : 1;
-  return Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+function nonNegativeNumber(value: number | null, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : Math.round(fallback);
 }
 
-function firstRecord(value: unknown): RawRecord {
-  if (Array.isArray(value))
-    return asRecord(
-      value.find((entry) => Object.keys(asRecord(entry)).length > 0),
-    );
-  return asRecord(value);
-}
-
-function asRecord(value: unknown): RawRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as RawRecord)
-    : {};
+function nullableNonNegativeNumber(value: number | null): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : null;
 }
 
 function sumItems(items: ReceiptItem[]): number {
