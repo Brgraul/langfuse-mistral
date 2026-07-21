@@ -1,60 +1,71 @@
 # Receipt Reconciliation Mystery
 
-Mistral OCR + Langfuse tracing over the [CORD v2](https://huggingface.co/datasets/naver-clova-ix/cord-v2)
-receipt dataset. The workflow reads a receipt, extracts structured fields, compares a
-synthetic expense claim against it, and decides whether to **approve / partially approve /
-reject / escalate** — with every step traced in Langfuse and evaluated against the dataset
-ground truth.
+An interactive receipt-review frontend backed by live rows from the
+[CORD v2](https://huggingface.co/datasets/naver-clova-ix/cord-v2) dataset on Hugging Face.
+Each generated review uses the real image and `ground_truth` annotation from the same
+dataset row, then deliberately perturbs the annotation into a synthetic employee claim.
+There are no static claims or bundled mock receipts in the web workflow.
 
 See [PLAN.md](./PLAN.md) for the team split.
 
-## Pipeline
+## Web workflow
 
 ```
-load receipt (CORD v2)  ->  Mistral OCR  ->  structured extraction  ->  synthetic claim
-                                                                              |
-        evaluate vs ground truth  <-  reconcile (policy engine)  <-----------+
+fetch one paired CORD row (image + ground_truth)
+  -> normalize the annotation
+  -> choose an applicable perturbation
+  -> render synthetic claim vs original ground truth
+  -> recommend reimbursement
 ```
 
-Each step is a Langfuse observation under one trace. Two scores are pushed:
-`extraction_accuracy` (extraction vs CORD ground truth) and `decision_correct`
-(verdict vs the claim's expected decision).
+The Node backend is a TanStack Start server function in
+`src/lib/receipt-generator.ts`. It fetches random validation/test rows from the Hugging
+Face datasets server, retries transient failures, and passes the paired row to the pure
+generator in `src/lib/receipt-generator-core.ts`. Clicking the next arrow fetches and
+generates another receipt on demand while retaining earlier receipts in the browser session.
 
 ## Setup
 
 ```bash
-uv venv .venv && source .venv/bin/activate
-uv pip install -r requirements.txt
-cp .env.example .env        # then fill in MISTRAL_API_KEY + LANGFUSE_* keys
+bun install
+bun run dev
 ```
 
-## Run
+No API key is required for the web workflow. It requires outbound access to
+`datasets-server.huggingface.co`.
+
+## Validate
 
 ```bash
-python main.py                                   # 1 receipt, random inconsistency, live APIs
-python main.py --n 3                             # 3 receipts
-python main.py --inconsistency change_claimed    # force a known case for the demo
-python main.py --mock                            # skip Mistral, use ground truth as OCR
-python main.py --seed 7 --out results.json       # deterministic + write results
+bun test
+bun run build
 ```
 
-- `--mock` runs the whole pipeline without calling Mistral (uses the CORD ground truth in
-  place of OCR) — handy if the live API is flaky during a demo.
-- Without Langfuse keys, tracing degrades to a no-op and the pipeline still runs locally.
+## Legacy Python pipeline
+
+The original Mistral OCR + Langfuse experiment remains under `receipt_recon/` and is
+available through `main.py`. It is separate from the Node frontend runtime.
+
+```bash
+uv venv .venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
 
 ## Injectable inconsistencies
 
-The claim generator (`receipt_recon/claims.py`) can inject any of:
+The web generator can inject any applicable perturbation for the selected receipt:
 
 | type | what it does | expected decision |
 |---|---|---|
-| `none` | faithful claim | approve |
-| `amount_mismatch` | inflated claimed amount | partial |
-| `claimed_cash_tendered` | claims cash tendered, not amount owed | partial |
-| `change_claimed` | adds change back on top of total | partial |
-| `tax_doubled` | claims tax twice | partial |
-| `pre_discount_price` | ignores an item discount | partial |
-| `non_reimbursable_item` | adds an alcohol line item | reject |
+| `total-mismatch` | inflates the claimed total | partial |
+| `cash-as-total` | claims cash tendered instead of amount owed | partial |
+| `change-claimed` | adds returned change to the claim | partial |
+| `items-mismatch-subtotal` | inflates a line item so the claim no longer reconciles | escalate |
+| `tax-doubled` | claims tax twice | partial |
+| `pre-discount-price` | ignores a printed discount | partial |
+| `non-reimbursable` | adds an alcohol item absent from the receipt | partial |
 
 ## Module map
 

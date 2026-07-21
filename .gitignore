@@ -19,6 +19,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+.playwright-cli/
 
 # Data caches / outputs
 .cache/
