@@ -1,0 +1,25 @@
+[project]
+name = "receipt-agent"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Simon Müller", email = "simon.mueller@xitaso.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "datasets>=5.0.0",
+    "fastapi>=0.139.2",
+    "huggingface-hub>=1.24.0",
+    "langfuse>=4.14.1",
+    "mistralai>=2.7.1",
+    "pillow>=12.3.0",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.51.0",
+]
+
+[project.scripts]
+receipt-agent = "receipt_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

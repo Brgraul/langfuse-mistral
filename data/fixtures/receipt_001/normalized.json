@@ -1,0 +1,14 @@
+{
+  "merchant": "Warung Bahari",
+  "items": [
+    { "name": "Nasi Goreng", "qty": 2, "unit_price": 25000.0, "price": 50000.0 },
+    { "name": "Es Teh Manis", "qty": 2, "unit_price": 5000.0, "price": 10000.0 }
+  ],
+  "subtotal": 60000.0,
+  "tax": 6000.0,
+  "discount": 0.0,
+  "total": 66000.0,
+  "payment_method": "cash",
+  "cash_price": 100000.0,
+  "change": 34000.0
+}
