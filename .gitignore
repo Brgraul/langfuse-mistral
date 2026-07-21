@@ -11,6 +11,15 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
+# Node / frontend
+node_modules/
+.output/
+.tanstack/
+.wrangler/
+dist/
+coverage/
+*.tsbuildinfo
+
 # Data caches / outputs
 .cache/
 data/samples/
