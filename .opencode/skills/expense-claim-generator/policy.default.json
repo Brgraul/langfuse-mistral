@@ -1,0 +1,30 @@
+{
+  "policy_name": "Default Employee Reimbursement Policy",
+  "non_reimbursable_categories": {
+    "alcohol": {
+      "keywords": ["beer", "bintang", "soju", "wine", "vodka", "whisky", "whiskey", "sake", "cocktail", "liquor", "arak", "guinness"],
+      "injectable_items": [
+        {"description": "BINTANG BEER 620ML", "unit_price": 85000},
+        {"description": "HOUSE RED WINE GLASS", "unit_price": 95000}
+      ]
+    },
+    "tobacco": {
+      "keywords": ["cigarette", "marlboro", "tobacco", "sampoerna", "gudang garam", "vape", "djarum"],
+      "injectable_items": [
+        {"description": "MARLBORO RED 20S", "unit_price": 62000}
+      ]
+    },
+    "gift_cards": {
+      "keywords": ["gift card", "giftcard", "gift voucher"],
+      "injectable_items": [
+        {"description": "GIFT CARD 100K", "unit_price": 100000}
+      ]
+    },
+    "lottery": {
+      "keywords": ["lottery", "lotto", "scratch card"],
+      "injectable_items": [
+        {"description": "LOTTERY TICKET", "unit_price": 50000}
+      ]
+    }
+  }
+}
