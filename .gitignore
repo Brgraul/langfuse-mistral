@@ -1,6 +1,35 @@
-.venv/
-__pycache__/
-*.pyc
+# Env / secrets
 .env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+.output/
+.tanstack/
+.wrangler/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Data caches / outputs
+.cache/
+data/samples/
 data/cord/
+outputs/
+results.json
+*.log
+
+# Langfuse
 .langfuse/
+
+# OS
+.DS_Store

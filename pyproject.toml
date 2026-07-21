@@ -1,25 +1,23 @@
 [project]
-name = "receipt-agent"
+name = "receipt-reconciliation"
 version = "0.1.0"
-description = "Add your description here"
-authors = [
-    { name = "Simon Müller", email = "simon.mueller@xitaso.com" }
-]
-requires-python = ">=3.14"
+description = "Receipt Reconciliation Mystery — Mistral OCR + Langfuse tracing over CORD v2"
+requires-python = ">=3.9"
 dependencies = [
-    "datasets>=5.0.0",
-    "fastapi>=0.139.2",
+    "mistralai>=1.10.0",
+    "langfuse>=3.0.0",
+    "datasets>=3.0.0",
     "huggingface-hub>=1.24.0",
-    "langfuse>=4.14.1",
-    "mistralai>=2.7.1",
-    "pillow>=12.3.0",
-    "python-dotenv>=1.2.2",
+    "pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.139.2",
     "uvicorn>=0.51.0",
 ]
 
-[project.scripts]
-receipt-agent = "receipt_agent:main"
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
 
-[build-system]
-requires = ["uv_build>=0.11.7,<0.12.0"]
-build-backend = "uv_build"
+[tool.ruff]
+line-length = 100
+target-version = "py39"
