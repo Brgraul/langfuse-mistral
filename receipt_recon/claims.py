@@ -95,7 +95,7 @@ def generate_claim(
 
     elif inconsistency == "pre_discount_price":
         claimed_discount = 0.0
-        claimed_amount = round(total + discount, 2) if discount else round(total * 1.1, 2)
+        claimed_amount = round(total + abs(discount), 2) if discount else round(total * 1.1, 2)
         note = "Employee claimed the pre-discount price."
 
     elif inconsistency == "non_reimbursable_item":

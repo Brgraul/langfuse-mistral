@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Receipt Reconciliation Demo</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 2rem; max-width: 1100px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+  .sub { color: #888; margin-bottom: 1.5rem; }
+  .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; margin-bottom: 1.5rem; }
+  .controls label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 0.25rem; }
+  select, button { font-size: 0.95rem; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid #ccc; }
+  button { background: #2563eb; color: white; border: none; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #999; cursor: default; }
+  .grid { display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem; align-items: start; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 1rem; }
+  img.receipt { width: 100%; border-radius: 6px; border: 1px solid #ddd; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  td, th { text-align: left; padding: 0.25rem 0.4rem; border-bottom: 1px solid #eee; }
+  .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 600; font-size: 0.85rem; }
+  .approve { background: #dcfce7; color: #166534; }
+  .partial { background: #fef9c3; color: #854d0e; }
+  .reject { background: #fee2e2; color: #991b1b; }
+  .escalate { background: #dbeafe; color: #1e40af; }
+  .rationale { margin-top: 0.75rem; font-size: 0.9rem; line-height: 1.4; }
+  .muted { color: #888; font-size: 0.85rem; }
+  .section-title { font-weight: 600; margin: 1rem 0 0.4rem; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.03em; color: #666; }
+  pre { background: #f6f6f6; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.8rem; }
+  #error { color: #991b1b; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+  <h1>Receipt Reconciliation Demo</h1>
+  <div class="sub">CORD v2 receipt &rarr; OCR extraction &rarr; synthetic claim &rarr; policy decision, all traced in Langfuse.</div>
+
+  <div class="controls">
+    <div>
+      <label>Receipt</label>
+      <select id="receiptSelect"></select>
+    </div>
+    <div>
+      <label>Injected inconsistency</label>
+      <select id="inconsistencySelect"></select>
+    </div>
+    <div>
+      <label>Mode</label>
+      <select id="modeSelect">
+        <option value="true" selected>Mock (ground truth as OCR)</option>
+        <option value="false">Live Mistral OCR</option>
+      </select>
+    </div>
+    <div>
+      <button id="runBtn">Reconcile</button>
+    </div>
+  </div>
+  <div id="error"></div>
+
+  <div class="grid">
+    <div class="card">
+      <img id="receiptImg" class="receipt" src="" alt="receipt">
+      <div class="section-title">Ground truth (CORD)</div>
+      <pre id="groundTruth" class="muted">select a receipt...</pre>
+    </div>
+
+    <div class="card">
+      <div id="result">
+        <div class="muted">Run a reconciliation to see the decision.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const receiptSelect = document.getElementById('receiptSelect');
+    const inconsistencySelect = document.getElementById('inconsistencySelect');
+    const modeSelect = document.getElementById('modeSelect');
+    const runBtn = document.getElementById('runBtn');
+    const receiptImg = document.getElementById('receiptImg');
+    const groundTruthEl = document.getElementById('groundTruth');
+    const resultEl = document.getElementById('result');
+    const errorEl = document.getElementById('error');
+
+    let samples = [];
+
+    async function loadSamples() {
+      const res = await fetch('/samples');
+      samples = await res.json();
+      receiptSelect.innerHTML = samples.map(s => `<option value="${s.receipt_id}">${s.receipt_id}</option>`).join('');
+      onReceiptChange();
+    }
+
+    async function loadInconsistencies() {
+      const res = await fetch('/inconsistencies');
+      const types = await res.json();
+      inconsistencySelect.innerHTML = types.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+
+    function onReceiptChange() {
+      const sample = samples.find(s => s.receipt_id === receiptSelect.value);
+      if (!sample) return;
+      receiptImg.src = sample.image_url;
+      groundTruthEl.textContent = JSON.stringify(sample.ground_truth, null, 2);
+    }
+
+    function badgeClass(decision) {
+      return { approve: 'approve', partial: 'partial', reject: 'reject', escalate: 'escalate' }[decision] || '';
+    }
+
+    async function run() {
+      errorEl.textContent = '';
+      runBtn.disabled = true;
+      runBtn.textContent = 'Running...';
+      const sample = samples.find(s => s.receipt_id === receiptSelect.value);
+      try {
+        const res = await fetch('/reconcile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_path: `data/samples/${sample.receipt_id}.png`,
+            receipt_id: sample.receipt_id,
+            mock: modeSelect.value === 'true',
+            ground_truth: sample.ground_truth,
+            inconsistency: inconsistencySelect.value,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        render(data);
+      } catch (e) {
+        errorEl.textContent = 'Error: ' + e.message;
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = 'Reconcile';
+      }
+    }
+
+    function render(data) {
+      const d = data.decision;
+      const c = data.claim;
+      const ex = data.extracted;
+      resultEl.innerHTML = `
+        <span class="badge ${badgeClass(d.decision)}">${d.decision.toUpperCase()}</span>
+        <span class="muted">reimbursable: ${d.reimbursable_amount}</span>
+        <div class="rationale">${d.rationale}</div>
+        ${d.mismatched_field ? `<div class="muted">mismatched field: <b>${d.mismatched_field}</b> &middot; policy rule: <b>${d.policy_rule ?? '-'}</b></div>` : ''}
+        ${d.evidence_needed ? `<div class="muted">evidence needed: ${d.evidence_needed}</div>` : ''}
+
+        <div class="section-title">Synthetic claim</div>
+        <table>
+          <tr><td>claim id</td><td>${c.claim_id}</td></tr>
+          <tr><td>injected inconsistency</td><td>${c.injected_inconsistency ?? 'none'}</td></tr>
+          <tr><td>claimed amount</td><td>${c.claimed_amount}</td></tr>
+          <tr><td>claimed tax</td><td>${c.claimed_tax ?? '-'}</td></tr>
+          <tr><td>claimed discount</td><td>${c.claimed_discount ?? '-'}</td></tr>
+          <tr><td>category</td><td>${c.policy_category}</td></tr>
+        </table>
+
+        <div class="section-title">Extracted receipt (OCR)</div>
+        <table>
+          <tr><td>total</td><td>${ex.total}</td></tr>
+          <tr><td>subtotal</td><td>${ex.subtotal}</td></tr>
+          <tr><td>tax</td><td>${ex.tax}</td></tr>
+          <tr><td>discount</td><td>${ex.discount}</td></tr>
+          <tr><td>source</td><td>${ex.source}</td></tr>
+        </table>
+
+        ${data.extraction_accuracy ? `<div class="muted">extraction accuracy: ${data.extraction_accuracy.score} (${data.extraction_accuracy.correct}/${data.extraction_accuracy.compared})</div>` : ''}
+        ${data.decision_correct ? `<div class="muted">decision correct: ${data.decision_correct.score === 1.0 ? 'yes' : 'no'} (expected ${data.decision_correct.expected})</div>` : ''}
+
+        <div class="section-title">Raw response</div>
+        <pre>${JSON.stringify(data, null, 2)}</pre>
+      `;
+    }
+
+    receiptSelect.addEventListener('change', onReceiptChange);
+    runBtn.addEventListener('click', run);
+
+    loadSamples();
+    loadInconsistencies();
+  </script>
+</body>
+</html>

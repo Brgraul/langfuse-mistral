@@ -91,7 +91,7 @@ def reconcile(claim: ExpenseClaim, receipt: ExtractedReceipt) -> Decision:
                 ("TAX_MISMATCH",
                  f"claimed {claim.claimed_amount} includes tax {receipt.tax} twice")
             )
-        elif receipt.discount and _approx(claim.claimed_amount, receipt_total + receipt.discount):
+        elif receipt.discount and _approx(claim.claimed_amount, receipt_total + abs(receipt.discount)):
             findings.append(
                 ("PRE_DISCOUNT_PRICE",
                  f"claimed {claim.claimed_amount} ignores discount {receipt.discount}")

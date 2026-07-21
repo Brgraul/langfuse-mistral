@@ -1,4 +1,5 @@
-"""FastAPI wrapper around the receipt_recon reconciliation pipeline.
+"""FastAPI wrapper around the receipt_recon reconciliation pipeline, plus a
+minimal static demo UI (receipt image + extracted fields + claim + decision).
 
 Mirrors main.py's run_one() as an HTTP endpoint: OCR/extract -> claim ->
 decision -> (optional) eval against ground truth, all under one Langfuse trace.
@@ -6,19 +7,27 @@ decision -> (optional) eval against ground truth, all under one Langfuse trace.
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .claims import generate_claim
+from .claims import INCONSISTENCY_TYPES, generate_claim
 from .config import langfuse_client
+from .dataset import SAMPLES_DIR, load_samples
 from .decision import reconcile
 from .evaluation import decision_correct, extraction_accuracy
 from .ocr import ocr_and_extract
 from .schemas import Decision, ExpenseClaim, ExtractedReceipt
 
 app = FastAPI(title="Receipt Reconciliation API")
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class ReconcileRequest(BaseModel):
@@ -101,3 +110,52 @@ def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileResponse:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Minimal demo UI support: list/serve cached CORD samples, list inconsistencies.
+# --------------------------------------------------------------------------- #
+@app.get("/samples")
+def list_samples():
+    """List CORD receipts already cached locally (downloads a couple if none exist)."""
+    if not os.path.isdir(SAMPLES_DIR) or not any(
+        f.endswith(".png") for f in os.listdir(SAMPLES_DIR)
+    ):
+        load_samples(n=3)
+
+    samples = []
+    for fname in sorted(os.listdir(SAMPLES_DIR)):
+        if not fname.endswith(".png"):
+            continue
+        receipt_id = fname[: -len(".png")]
+        gt_path = os.path.join(SAMPLES_DIR, f"{receipt_id}.gt.json")
+        with open(gt_path) as f:
+            ground_truth = json.load(f)
+        samples.append({
+            "receipt_id": receipt_id,
+            "image_url": f"/samples/{receipt_id}/image",
+            "ground_truth": ground_truth,
+        })
+    return samples
+
+
+@app.get("/samples/{receipt_id}/image")
+def get_sample_image(receipt_id: str):
+    path = os.path.join(SAMPLES_DIR, f"{receipt_id}.png")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="sample not found")
+    return FileResponse(path)
+
+
+@app.get("/inconsistencies")
+def list_inconsistencies():
+    return INCONSISTENCY_TYPES
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
