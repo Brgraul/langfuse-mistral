@@ -1,0 +1,21 @@
+# Env / secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data caches / outputs
+.cache/
+data/samples/
+outputs/
+*.log
+
+# OS
+.DS_Store
