@@ -130,12 +130,24 @@ def _crop_block_base64(image_path: str, block: Any, page_dims: Any) -> Optional[
 
 
 def _trace_blocks(image_path: str, page, langfuse) -> None:
-    """One child span per detected block: input = cropped region, output = content."""
+    """One child span per detected block: input = cropped region, output = content.
+
+    Named "<type> <n>" (e.g. "table 1", "text 3") using a running per-type counter
+    in reading order, so each element is distinguishable in the Langfuse trace tree
+    instead of every block showing up as the same generic "block:text" name.
+    """
     blocks = getattr(page, "blocks", None) or []
     page_dims = getattr(page, "dimensions", None)
+    type_counts: dict[str, int] = {}
 
     for block in blocks:
         block_type = getattr(block, "type", "unknown")
+        type_counts[block_type] = type_counts.get(block_type, 0) + 1
+        ordinal = type_counts[block_type]
+
+        ref_id = getattr(block, "table_id", None) or getattr(block, "image_id", None)
+        label = f"{block_type} {ordinal}" + (f" ({ref_id})" if ref_id else "")
+
         crop_b64 = _crop_block_base64(image_path, block, page_dims)
 
         span_input: Any = {
@@ -154,9 +166,12 @@ def _trace_blocks(image_path: str, page, langfuse) -> None:
             )
 
         with langfuse.start_as_current_observation(
-            name=f"block:{block_type}", as_type="span", input=span_input,
+            name=label, as_type="span", input=span_input,
         ) as bspan:
-            bspan.update(output=block.content, metadata={"block_type": block_type})
+            bspan.update(
+                output=block.content,
+                metadata={"block_type": block_type, "ordinal": ordinal, "ref_id": ref_id},
+            )
 
 
 def run_ocr(image_path: str, langfuse=None):
