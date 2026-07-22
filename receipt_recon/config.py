@@ -96,5 +96,8 @@ class _NoopLangfuse:
     def update_current_trace(self, **kwargs):
         pass
 
+    def create_event(self, **kwargs):
+        pass
+
     def flush(self):
         pass
